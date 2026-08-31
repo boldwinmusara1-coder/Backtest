@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Candlestick 1: Red/Bearish -->
+    <!-- Wick -->
+    <path
+        android:pathData="M35,40 L35,68"
+        android:strokeWidth="2.5"
+        android:strokeColor="#EF5350"
+        android:strokeLineCap="round" />
+    <!-- Body -->
+    <path
+        android:pathData="M31,46 L39,46 L39,60 L31,60 Z"
+        android:fillColor="#EF5350" />
+
+    <!-- Candlestick 2: Green/Bullish -->
+    <!-- Wick -->
+    <path
+        android:pathData="M54,28 L54,74"
+        android:strokeWidth="2.5"
+        android:strokeColor="#10B981"
+        android:strokeLineCap="round" />
+    <!-- Body -->
+    <path
+        android:pathData="M49,36 L59,36 L59,58 L49,58 Z"
+        android:fillColor="#10B981" />
+
+    <!-- Candlestick 3: Green/Bullish Breakout -->
+    <!-- Wick -->
+    <path
+        android:pathData="M73,22 L73,62"
+        android:strokeWidth="2.5"
+        android:strokeColor="#06D6A0"
+        android:strokeLineCap="round" />
+    <!-- Body -->
+    <path
+        android:pathData="M68,26 L78,26 L78,48 L68,48 Z"
+        android:fillColor="#06D6A0" />
+
+    <!-- Trend Indicator / Moving Average Line -->
+    <path
+        android:pathData="M24,66 C36,64 45,52 54,42 C63,32 72,30 84,24"
+        android:strokeWidth="3.5"
+        android:strokeColor="#38BDF8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- Signal Dot / Golden Cross Marker -->
+    <path
+        android:pathData="M84,24 A3,3 0 1,1 84,24.01"
+        android:strokeWidth="4"
+        android:strokeColor="#F59E0B"
+        android:strokeLineCap="round" />
+</vector>
+
