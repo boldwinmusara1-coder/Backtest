@@ -64,8 +64,12 @@ fun BacktestScreen(
     val isDualComparing by viewModel.isDualComparing.collectAsState()
     val dataFetchError by viewModel.dataFetchError.collectAsState()
 
+    val allStrategies by viewModel.allStrategies.collectAsState()
+    val pendingConfiguration by viewModel.pendingConfiguration.collectAsState()
+
     var showEngineValidationDialog by remember { mutableStateOf(false) }
     var showConfigEditorDialog by remember { mutableStateOf(false) }
+    var showStrategyCustomizerDialog by remember { mutableStateOf(false) }
     var selectedResultTab by remember { mutableStateOf(BacktestResultTab.DASHBOARD) }
     var inspectedTrade by remember { mutableStateOf<Trade?>(null) }
 
@@ -101,6 +105,22 @@ fun BacktestScreen(
                 inspectedTrade = null
             },
             onDismiss = { inspectedTrade = null }
+        )
+    }
+
+    // Strategy Customizer Dialog Modal
+    if (showStrategyCustomizerDialog) {
+        StrategyCustomizerDialog(
+            strategy = selectedStrategy,
+            onDismiss = { showStrategyCustomizerDialog = false },
+            onSave = { updatedStrat ->
+                viewModel.setStrategy(updatedStrat)
+                showStrategyCustomizerDialog = false
+            },
+            onDuplicate = { newName ->
+                viewModel.duplicateStrategyAsExperiment(selectedStrategy, newName)
+                showStrategyCustomizerDialog = false
+            }
         )
     }
 
@@ -345,6 +365,116 @@ fun BacktestScreen(
                                     StrategyMetricMini("Expectancy", aplusMetrics?.let { "$${df.format(it.expectancyDollars)}" } ?: "--", theme)
                                     StrategyMetricMini("Max DD", aplusMetrics?.let { "-${df.format(it.maxDrawdownPercent)}%" } ?: "--", theme, theme.accentRed)
                                 }
+                            }
+                        }
+                    }
+
+                    // Additional Strategies & Custom Experiments
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "OTHER STRATEGIES & EXPERIMENTS",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = theme.textSecondary,
+                            letterSpacing = 0.5.sp
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            val otherStrategies = allStrategies.filter {
+                                it.id != STRATEGY_ID_TRENDLINE_BREAK_HIGH_WIN_RATE && it.id != STRATEGY_ID_A_PLUS_V1_0
+                            }
+                            otherStrategies.forEach { strat ->
+                                val isSel = selectedStrategy.id == strat.id
+                                FilterChip(
+                                    selected = isSel,
+                                    onClick = { viewModel.setStrategy(strat) },
+                                    label = { Text(strat.name, fontSize = 11.sp, fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal) },
+                                    leadingIcon = if (strat.isCustom) {
+                                        { Icon(Icons.Default.Science, contentDescription = null, modifier = Modifier.size(12.dp)) }
+                                    } else null,
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = theme.brandPrimary.copy(alpha = 0.2f),
+                                        selectedLabelColor = theme.brandPrimary
+                                    ),
+                                    border = FilterChipDefaults.filterChipBorder(
+                                        enabled = true,
+                                        selected = isSel,
+                                        borderColor = theme.borderSubtle,
+                                        selectedBorderColor = theme.brandPrimary
+                                    ),
+                                    modifier = Modifier.height(30.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // Active Selected Strategy Card (if not one of the two top cards)
+                    if (!isHighWinRateSelected && !isAplusSelected) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = theme.brandPrimary.copy(alpha = 0.08f),
+                            border = androidx.compose.foundation.BorderStroke(1.5.dp, theme.brandPrimary)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = selectedStrategy.name,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp,
+                                            color = theme.brandPrimary
+                                        )
+                                        Text(
+                                            text = "Type: ${selectedStrategy.strategyType.name} ${if (selectedStrategy.isCustom) "• Custom Experiment" else "• Preset"}",
+                                            fontSize = 10.sp,
+                                            color = theme.textSecondary
+                                        )
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = { showStrategyCustomizerDialog = true },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(30.dp)
+                                    ) {
+                                        Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Parameters", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                                Text(
+                                    text = selectedStrategy.description,
+                                    fontSize = 11.sp,
+                                    color = theme.textSecondary,
+                                    lineHeight = 15.sp
+                                )
+                            }
+                        }
+                    } else {
+                        // Option to duplicate frozen strategy as experiment
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    viewModel.duplicateStrategyAsExperiment(
+                                        baseStrategy = selectedStrategy,
+                                        customName = "${selectedStrategy.name} (Custom)"
+                                    )
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp), tint = theme.brandPrimary)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Duplicate as Mutable Experiment", fontSize = 11.sp, color = theme.brandPrimary, fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
@@ -685,6 +815,69 @@ fun BacktestScreen(
                         }
                     }
 
+                    // Configuration Snapshot of This Run
+                    item {
+                        val runConfig = result.configuration ?: pendingConfiguration
+                        Card(
+                            modifier = Modifier.fillMaxWidth().testTag("result_config_snapshot_card"),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(containerColor = theme.surface),
+                            border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(theme.borderSubtle))
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "EXPERIMENT PARAMETER SNAPSHOT",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = theme.brandPrimary,
+                                        letterSpacing = 1.sp
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = theme.brandPrimary.copy(alpha = 0.15f)
+                                    ) {
+                                        Text(
+                                            text = runConfig.strategy.name,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = theme.brandPrimary,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("Asset / Timeframe:", fontSize = 11.sp, color = theme.textSecondary)
+                                    Text("${runConfig.asset.symbol} • ${runConfig.timeframe.label} (${runConfig.datePreset.label})", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = theme.textPrimary)
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("Risk & Capital:", fontSize = 11.sp, color = theme.textSecondary)
+                                    Text("$${df.format(runConfig.initialCapital)} • ${runConfig.riskPerTrade}% risk/trade", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = theme.textPrimary)
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("Execution & Slippage:", fontSize = 11.sp, color = theme.textSecondary)
+                                    Text("${runConfig.commissionBps.toInt()} bps comm • ${runConfig.slippageBps.toInt()} bps slip • ${runConfig.intrabarExecution.label}", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = theme.textPrimary)
+                                }
+                            }
+                        }
+                    }
+
                     // Key Performance Metrics (17 Metrics)
                     item {
                         Card(
@@ -886,3 +1079,213 @@ private fun MetricBox(
         }
     }
 }
+
+@Composable
+fun StrategyCustomizerDialog(
+    strategy: StrategyDefinition,
+    onDismiss: () -> Unit,
+    onSave: (StrategyDefinition) -> Unit,
+    onDuplicate: (String) -> Unit
+) {
+    val theme = LocalAppTheme.current
+    var name by remember { mutableStateOf(if (strategy.isCustom) strategy.name else "${strategy.name} (Custom)") }
+    var currentConfig by remember { mutableStateOf(strategy.indicatorConfig) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text(
+                    text = if (strategy.isCustom) "Edit Strategy Parameters" else "Strategy Experiment Parameters",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = theme.textPrimary
+                )
+                Text(
+                    text = if (strategy.isCustom) "Customized Strategy Definition" else "Creates a new custom strategy experiment",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = theme.textSecondary,
+                    fontSize = 11.sp
+                )
+            }
+        },
+        text = {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                item {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Strategy Name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+
+                when (strategy.strategyType) {
+                    StrategyType.MA_CROSSOVER -> {
+                        item {
+                            var fast by remember { mutableStateOf(currentConfig.maParams.fastPeriod.toString()) }
+                            OutlinedTextField(
+                                value = fast,
+                                onValueChange = {
+                                    fast = it
+                                    it.toIntOrNull()?.let { v ->
+                                        currentConfig = currentConfig.copy(maParams = currentConfig.maParams.copy(fastPeriod = v))
+                                    }
+                                },
+                                label = { Text("Fast MA Period") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
+                        item {
+                            var slow by remember { mutableStateOf(currentConfig.maParams.slowPeriod.toString()) }
+                            OutlinedTextField(
+                                value = slow,
+                                onValueChange = {
+                                    slow = it
+                                    it.toIntOrNull()?.let { v ->
+                                        currentConfig = currentConfig.copy(maParams = currentConfig.maParams.copy(slowPeriod = v))
+                                    }
+                                },
+                                label = { Text("Slow MA Period") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
+                    }
+                    StrategyType.RSI_MEAN_REVERSION -> {
+                        item {
+                            var period by remember { mutableStateOf(currentConfig.rsiParams.period.toString()) }
+                            OutlinedTextField(
+                                value = period,
+                                onValueChange = {
+                                    period = it
+                                    it.toIntOrNull()?.let { v ->
+                                        currentConfig = currentConfig.copy(rsiParams = currentConfig.rsiParams.copy(period = v))
+                                    }
+                                },
+                                label = { Text("RSI Period") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
+                        item {
+                            var oversold by remember { mutableStateOf(currentConfig.rsiParams.oversoldThreshold.toString()) }
+                            OutlinedTextField(
+                                value = oversold,
+                                onValueChange = {
+                                    oversold = it
+                                    it.toDoubleOrNull()?.let { v ->
+                                        currentConfig = currentConfig.copy(rsiParams = currentConfig.rsiParams.copy(oversoldThreshold = v))
+                                    }
+                                },
+                                label = { Text("Oversold Threshold") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
+                    }
+                    StrategyType.BOLLINGER_BREAKOUT, StrategyType.BOLLINGER_REVERSION -> {
+                        item {
+                            var period by remember { mutableStateOf(currentConfig.bollingerParams.period.toString()) }
+                            OutlinedTextField(
+                                value = period,
+                                onValueChange = {
+                                    period = it
+                                    it.toIntOrNull()?.let { v ->
+                                        currentConfig = currentConfig.copy(bollingerParams = currentConfig.bollingerParams.copy(period = v))
+                                    }
+                                },
+                                label = { Text("Bollinger Period") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
+                        item {
+                            var stdDev by remember { mutableStateOf(currentConfig.bollingerParams.stdDevMultiplier.toString()) }
+                            OutlinedTextField(
+                                value = stdDev,
+                                onValueChange = {
+                                    stdDev = it
+                                    it.toDoubleOrNull()?.let { v ->
+                                        currentConfig = currentConfig.copy(bollingerParams = currentConfig.bollingerParams.copy(stdDevMultiplier = v))
+                                    }
+                                },
+                                label = { Text("StdDev Multiplier") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
+                    }
+                    StrategyType.SUPERTREND_RUN -> {
+                        item {
+                            var period by remember { mutableStateOf(currentConfig.supertrendParams.atrPeriod.toString()) }
+                            OutlinedTextField(
+                                value = period,
+                                onValueChange = {
+                                    period = it
+                                    it.toIntOrNull()?.let { v ->
+                                        currentConfig = currentConfig.copy(supertrendParams = currentConfig.supertrendParams.copy(atrPeriod = v))
+                                    }
+                                },
+                                label = { Text("ATR Period") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
+                        item {
+                            var mult by remember { mutableStateOf(currentConfig.supertrendParams.multiplier.toString()) }
+                            OutlinedTextField(
+                                value = mult,
+                                onValueChange = {
+                                    mult = it
+                                    it.toDoubleOrNull()?.let { v ->
+                                        currentConfig = currentConfig.copy(supertrendParams = currentConfig.supertrendParams.copy(multiplier = v))
+                                    }
+                                },
+                                label = { Text("Multiplier") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
+                    }
+                    else -> {
+                        item {
+                            Text(
+                                text = "Strategy Type: ${strategy.strategyType.title}",
+                                fontSize = 12.sp,
+                                color = theme.textSecondary
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val updated = strategy.copy(
+                        id = if (strategy.isCustom) strategy.id else "custom_${System.currentTimeMillis()}_${strategy.id}",
+                        name = name,
+                        indicatorConfig = currentConfig,
+                        isCustom = true
+                    )
+                    onSave(updated)
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = theme.brandPrimary)
+            ) {
+                Text("Save Experiment")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = theme.textSecondary)
+            }
+        }
+    )
+}
+

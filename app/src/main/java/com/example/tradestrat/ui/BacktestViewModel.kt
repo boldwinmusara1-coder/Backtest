@@ -47,6 +47,12 @@ class BacktestViewModel(application: Application) : AndroidViewModel(application
     private val _selectedDatePreset = MutableStateFlow(DateRangePreset.DAYS_180)
     val selectedDatePreset = _selectedDatePreset.asStateFlow()
 
+    private val _customStartDate = MutableStateFlow<String?>(null)
+    val customStartDate = _customStartDate.asStateFlow()
+
+    private val _customEndDate = MutableStateFlow<String?>(null)
+    val customEndDate = _customEndDate.asStateFlow()
+
     private val _dataFetchError = MutableStateFlow<String?>(null)
     val dataFetchError = _dataFetchError.asStateFlow()
 
@@ -59,11 +65,56 @@ class BacktestViewModel(application: Application) : AndroidViewModel(application
     private val _customCsvContent = MutableStateFlow<String?>(null)
     val customCsvContent = _customCsvContent.asStateFlow()
 
+    // Custom & Experimental Strategies
+    private val _customStrategies = MutableStateFlow<List<StrategyDefinition>>(emptyList())
+    val customStrategies = _customStrategies.asStateFlow()
+
+    // All available strategies (Presets + Custom + DB Saved)
+    val allStrategies: StateFlow<List<StrategyDefinition>> = combine(
+        _customStrategies,
+        repository.savedStrategies
+    ) { custom, saved ->
+        val list = mutableListOf<StrategyDefinition>()
+        list.addAll(StrategyDefinition.PRESETS)
+        for (c in custom) {
+            if (list.none { it.id == c.id }) list.add(c)
+        }
+        for (s in saved) {
+            if (list.none { it.id == s.id }) list.add(s)
+        }
+        list
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StrategyDefinition.PRESETS)
+
+    // Unified Backtest Configuration Model State
+    private val _pendingConfiguration = MutableStateFlow(
+        BacktestConfiguration(
+            strategy = StrategyDefinition.PRESETS.first(),
+            asset = MarketDataProvider.ASSETS.first(),
+            marketRegime = MarketRegime.HISTORICAL_REALISTIC,
+            timeframe = Timeframe.D1,
+            provider = ProviderSelection.AUTO,
+            datePreset = DateRangePreset.DAYS_180,
+            initialCapital = 10000.0,
+            riskPerTrade = 25.0,
+            positionSizingMode = PositionSizingMode.PERCENT_EQUITY,
+            stopLossType = StopLossType.PERCENTAGE,
+            stopLossValue = 3.0,
+            takeProfitType = TakeProfitType.RISK_REWARD_RATIO,
+            takeProfitValue = 2.0,
+            commissionBps = 10.0,
+            slippageBps = 5.0,
+            executionModel = ExecutionModel.REALISTIC,
+            intrabarExecution = IntrabarExecutionAssumption.PESSIMISTIC_STOP_FIRST
+        )
+    )
+    val pendingConfiguration = _pendingConfiguration.asStateFlow()
+
     fun setCustomCsvContent(csv: String?) {
         _customCsvContent.value = csv
         if (!csv.isNullOrBlank()) {
             _selectedProvider.value = ProviderSelection.CSV_IMPORT
         }
+        syncPendingConfiguration()
     }
 
     // Execution Outputs
@@ -213,25 +264,80 @@ class BacktestViewModel(application: Application) : AndroidViewModel(application
         // Safe startup: do not execute backtest automatically on launch
     }
 
+    fun syncPendingConfiguration() {
+        _pendingConfiguration.value = buildCurrentBacktestConfiguration()
+    }
+
+    fun buildCurrentBacktestConfiguration(): BacktestConfiguration {
+        val asset = _selectedAsset.value
+        val regime = _selectedRegime.value
+        val tf = _selectedTimeframe.value
+        val strat = _selectedStrategy.value
+        val risk = _riskParameters.value
+        val preset = _selectedDatePreset.value
+        val prov = _selectedProvider.value
+        val now = System.currentTimeMillis()
+        val startMs = now - (preset.days.toLong() * 24L * 60L * 60L * 1000L)
+
+        return BacktestConfiguration(
+            strategy = strat,
+            asset = asset,
+            marketRegime = regime,
+            timeframe = tf,
+            provider = prov,
+            datePreset = preset,
+            startDate = _customStartDate.value ?: BacktestConfiguration.calculateStartDate(preset),
+            endDate = _customEndDate.value ?: BacktestConfiguration.calculateEndDate(),
+            startTimestamp = startMs,
+            endTimestamp = now,
+            customCsvContent = _customCsvContent.value,
+            initialCapital = risk.initialCapital,
+            positionSizingMode = risk.positionSizingMode,
+            riskPerTrade = risk.positionSizeValue,
+            leverage = risk.leverage,
+            allowShorting = risk.allowShorting,
+            maxDrawdownCircuitBreakerPct = risk.maxDrawdownCircuitBreakerPct,
+            stopLossType = risk.stopLossType,
+            stopLossValue = risk.stopLossValue,
+            takeProfitType = risk.takeProfitType,
+            takeProfitValue = risk.takeProfitValue,
+            commissionBps = risk.commissionBps,
+            slippageBps = risk.slippageBps,
+            executionModel = risk.executionModel,
+            intrabarExecution = risk.intrabarExecution,
+            strategyParams = BacktestConfiguration.extractStrategyParameters(strat)
+        )
+    }
+
     fun setAsset(asset: MarketAsset) {
         _selectedAsset.value = asset
         recordRecentSymbol(asset.symbol)
         _currentResult.value = null
+        syncPendingConfiguration()
     }
 
     fun setRegime(regime: MarketRegime) {
         _selectedRegime.value = regime
         _currentResult.value = null
+        syncPendingConfiguration()
     }
 
     fun setTimeframe(tf: Timeframe) {
         _selectedTimeframe.value = tf
         _currentResult.value = null
+        syncPendingConfiguration()
+    }
+
+    fun setDateRange(startDate: String, endDate: String) {
+        _customStartDate.value = startDate
+        _customEndDate.value = endDate
+        _currentResult.value = null
+        syncPendingConfiguration()
     }
 
     fun setStrategy(strategy: StrategyDefinition) {
         _currentResult.value = null
-        if (strategy.strategyType == StrategyType.A_PLUS_TRENDLINE) {
+        if (strategy.strategyType == StrategyType.A_PLUS_TRENDLINE && !strategy.isCustom) {
             val aplusState = _aplusApprovalState.value
             val alignedConfig = if (aplusState.isApproved) {
                 aplusState.activeConfig
@@ -247,6 +353,182 @@ class BacktestViewModel(application: Application) : AndroidViewModel(application
         } else {
             _selectedStrategy.value = strategy
         }
+        syncPendingConfiguration()
+    }
+
+    fun duplicateStrategyAsExperiment(
+        baseStrategy: StrategyDefinition = _selectedStrategy.value,
+        customName: String? = null
+    ): StrategyDefinition {
+        val count = _customStrategies.value.size + 1
+        val newId = "custom_${System.currentTimeMillis()}_${baseStrategy.id}"
+        val name = customName?.takeIf { it.isNotBlank() } ?: "${baseStrategy.name} (Custom #$count)"
+
+        val clonedConfig = when (baseStrategy.strategyType) {
+            StrategyType.A_PLUS_TRENDLINE -> {
+                baseStrategy.indicatorConfig.copy(
+                    aPlusTrendlineConfig = baseStrategy.indicatorConfig.aPlusTrendlineConfig.copy(
+                        profileName = "EXP_$name",
+                        isExperimental = true,
+                        isApproved = true
+                    )
+                )
+            }
+            else -> baseStrategy.indicatorConfig
+        }
+
+        val newStrategy = baseStrategy.copy(
+            id = newId,
+            name = name,
+            description = "Experimental copy derived from ${baseStrategy.name}",
+            isCustom = true,
+            indicatorConfig = clonedConfig
+        )
+
+        _customStrategies.value = _customStrategies.value + newStrategy
+        setStrategy(newStrategy)
+        return newStrategy
+    }
+
+    fun updateStrategyParameter(paramKey: String, value: Any) {
+        val currentStrat = _selectedStrategy.value
+        val targetStrat = if (!currentStrat.isCustom && (currentStrat.id == STRATEGY_ID_A_PLUS_V1_0 || currentStrat.id == STRATEGY_ID_TRENDLINE_BREAK_HIGH_WIN_RATE)) {
+            duplicateStrategyAsExperiment(currentStrat, "${currentStrat.name} (Custom)")
+        } else {
+            currentStrat
+        }
+
+        val ic = targetStrat.indicatorConfig
+        val updatedIc = when (targetStrat.strategyType) {
+            StrategyType.MA_CROSSOVER -> {
+                when (paramKey) {
+                    "fastPeriod" -> ic.copy(maParams = ic.maParams.copy(fastPeriod = (value as Number).toInt()))
+                    "slowPeriod" -> ic.copy(maParams = ic.maParams.copy(slowPeriod = (value as Number).toInt()))
+                    "useEma" -> ic.copy(maParams = ic.maParams.copy(useEma = value as Boolean))
+                    else -> ic
+                }
+            }
+            StrategyType.RSI_MEAN_REVERSION -> {
+                when (paramKey) {
+                    "period" -> ic.copy(rsiParams = ic.rsiParams.copy(period = (value as Number).toInt()))
+                    "oversoldThreshold" -> ic.copy(rsiParams = ic.rsiParams.copy(oversoldThreshold = (value as Number).toDouble()))
+                    "overboughtThreshold" -> ic.copy(rsiParams = ic.rsiParams.copy(overboughtThreshold = (value as Number).toDouble()))
+                    else -> ic
+                }
+            }
+            StrategyType.MACD_MOMENTUM -> {
+                when (paramKey) {
+                    "fastPeriod" -> ic.copy(macdParams = ic.macdParams.copy(fastPeriod = (value as Number).toInt()))
+                    "slowPeriod" -> ic.copy(macdParams = ic.macdParams.copy(slowPeriod = (value as Number).toInt()))
+                    "signalPeriod" -> ic.copy(macdParams = ic.macdParams.copy(signalPeriod = (value as Number).toInt()))
+                    else -> ic
+                }
+            }
+            StrategyType.BOLLINGER_BREAKOUT, StrategyType.BOLLINGER_REVERSION -> {
+                when (paramKey) {
+                    "period" -> ic.copy(bollingerParams = ic.bollingerParams.copy(period = (value as Number).toInt()))
+                    "stdDevMultiplier" -> ic.copy(bollingerParams = ic.bollingerParams.copy(stdDevMultiplier = (value as Number).toDouble()))
+                    else -> ic
+                }
+            }
+            StrategyType.SUPERTREND_RUN -> {
+                when (paramKey) {
+                    "atrPeriod" -> ic.copy(supertrendParams = ic.supertrendParams.copy(atrPeriod = (value as Number).toInt()))
+                    "multiplier" -> ic.copy(supertrendParams = ic.supertrendParams.copy(multiplier = (value as Number).toDouble()))
+                    else -> ic
+                }
+            }
+            StrategyType.TURTLE_BREAKOUT -> {
+                when (paramKey) {
+                    "period" -> ic.copy(donchianParams = ic.donchianParams.copy(period = (value as Number).toInt()))
+                    else -> ic
+                }
+            }
+            StrategyType.OPENING_RANGE_BREAKOUT -> {
+                when (paramKey) {
+                    "openingRangeMinutes" -> ic.copy(orbParams = ic.orbParams.copy(openingRangeMinutes = (value as Number).toInt()))
+                    "volumeMultiplier" -> ic.copy(orbParams = ic.orbParams.copy(volumeMultiplier = (value as Number).toDouble()))
+                    "breakoutBufferPct" -> ic.copy(orbParams = ic.orbParams.copy(breakoutBufferPct = (value as Number).toDouble()))
+                    "useEmaTrendFilter" -> ic.copy(orbParams = ic.orbParams.copy(useEmaTrendFilter = value as Boolean))
+                    "emaTrendPeriod" -> ic.copy(orbParams = ic.orbParams.copy(emaTrendPeriod = (value as Number).toInt()))
+                    "useRsiFilter" -> ic.copy(orbParams = ic.orbParams.copy(useRsiFilter = value as Boolean))
+                    "rsiThreshold" -> ic.copy(orbParams = ic.orbParams.copy(rsiThreshold = (value as Number).toDouble()))
+                    else -> ic
+                }
+            }
+            StrategyType.TRENDLINE_BREAK, StrategyType.TRENDLINE_BOUNCE -> {
+                when (paramKey) {
+                    "pivotLookback" -> ic.copy(trendlineParams = ic.trendlineParams.copy(pivotLookback = (value as Number).toInt()))
+                    "pivotStrength" -> ic.copy(trendlineParams = ic.trendlineParams.copy(pivotStrength = (value as Number).toInt()))
+                    "minTouches" -> ic.copy(trendlineParams = ic.trendlineParams.copy(minTouches = (value as Number).toInt()))
+                    "maxLineAge" -> ic.copy(trendlineParams = ic.trendlineParams.copy(maxLineAge = (value as Number).toInt()))
+                    "confirmationThresholdPct" -> ic.copy(trendlineParams = ic.trendlineParams.copy(confirmationThresholdPct = (value as Number).toDouble()))
+                    "retestRequired" -> ic.copy(trendlineParams = ic.trendlineParams.copy(retestRequired = value as Boolean))
+                    "useRsiFilter" -> ic.copy(trendlineParams = ic.trendlineParams.copy(useRsiFilter = value as Boolean))
+                    "useMaTrendFilter" -> ic.copy(trendlineParams = ic.trendlineParams.copy(useMaTrendFilter = value as Boolean))
+                    else -> ic
+                }
+            }
+            StrategyType.SMC_CONCEPTS, StrategyType.ICT_CONCEPTS, StrategyType.SMC_ICT_CONCEPTS -> {
+                val smc = ic.smcConfig
+                val updatedSmc = when (paramKey) {
+                    "useBos" -> smc.copy(useBos = value as Boolean)
+                    "useChoch" -> smc.copy(useChoch = value as Boolean)
+                    "useLiquiditySweep" -> smc.copy(useLiquiditySweep = value as Boolean)
+                    "useFvg" -> smc.copy(useFvg = value as Boolean)
+                    "useOrderBlock" -> smc.copy(useOrderBlock = value as Boolean)
+                    "useBreakerBlock" -> smc.copy(useBreakerBlock = value as Boolean)
+                    "usePremiumDiscount" -> smc.copy(usePremiumDiscount = value as Boolean)
+                    "useDisplacement" -> smc.copy(useDisplacement = value as Boolean)
+                    "obLookback" -> smc.copy(obLookback = (value as Number).toInt())
+                    "breakerLookback" -> smc.copy(breakerLookback = (value as Number).toInt())
+                    "sweepLookback" -> smc.copy(sweepLookback = (value as Number).toInt())
+                    "sweepWickMinPct" -> smc.copy(sweepWickMinPct = (value as Number).toDouble())
+                    "fvgMinGapAtrMultiple" -> smc.copy(fvgMinGapAtrMultiple = (value as Number).toDouble())
+                    "displacementAtrMultiplier" -> smc.copy(displacementAtrMultiplier = (value as Number).toDouble())
+                    "discountThresholdPct" -> smc.copy(discountThresholdPct = (value as Number).toDouble())
+                    "requireConfluence" -> smc.copy(requireConfluence = value as Boolean)
+                    "minConfluences" -> smc.copy(minConfluences = (value as Number).toInt())
+                    else -> smc
+                }
+                ic.copy(smcConfig = updatedSmc)
+            }
+            StrategyType.A_PLUS_TRENDLINE -> {
+                val aplus = ic.aPlusTrendlineConfig
+                val updatedAplus = when (paramKey) {
+                    "swingLookback" -> aplus.copy(swingLookback = (value as Number).toInt())
+                    "confirmationBars" -> aplus.copy(confirmationBars = (value as Number).toInt())
+                    "minSwingSeparationBars" -> aplus.copy(minSwingSeparationBars = (value as Number).toInt())
+                    "minTouches" -> aplus.copy(minTouches = (value as Number).toInt())
+                    "breakConfirmationATR" -> aplus.copy(breakConfirmationATR = (value as Number).toDouble())
+                    "retestToleranceATR" -> aplus.copy(retestToleranceATR = (value as Number).toDouble())
+                    "retestMaxBars" -> aplus.copy(retestMaxBars = (value as Number).toInt())
+                    "stopBufferATR" -> aplus.copy(stopBufferATR = (value as Number).toDouble())
+                    "breakEvenTriggerR" -> aplus.copy(breakEvenTriggerR = (value as Number).toDouble())
+                    "requireStructuralBreakEven" -> aplus.copy(requireStructuralBreakEven = value as Boolean)
+                    "enableStructuralTrailing" -> aplus.copy(enableStructuralTrailing = value as Boolean)
+                    "exitOnCounterStructureBreak" -> aplus.copy(exitOnCounterStructureBreak = value as Boolean)
+                    else -> aplus
+                }
+                ic.copy(aPlusTrendlineConfig = updatedAplus)
+            }
+            StrategyType.MULTI_CONFLUENCE -> {
+                when (paramKey) {
+                    "maFastPeriod" -> ic.copy(maParams = ic.maParams.copy(fastPeriod = (value as Number).toInt()))
+                    "maSlowPeriod" -> ic.copy(maParams = ic.maParams.copy(slowPeriod = (value as Number).toInt()))
+                    "rsiPeriod" -> ic.copy(rsiParams = ic.rsiParams.copy(period = (value as Number).toInt()))
+                    "rsiOversold" -> ic.copy(rsiParams = ic.rsiParams.copy(oversoldThreshold = (value as Number).toDouble()))
+                    "rsiOverbought" -> ic.copy(rsiParams = ic.rsiParams.copy(overboughtThreshold = (value as Number).toDouble()))
+                    "macdFast" -> ic.copy(macdParams = ic.macdParams.copy(fastPeriod = (value as Number).toInt()))
+                    "macdSlow" -> ic.copy(macdParams = ic.macdParams.copy(slowPeriod = (value as Number).toInt()))
+                    "macdSignal" -> ic.copy(macdParams = ic.macdParams.copy(signalPeriod = (value as Number).toInt()))
+                    else -> ic
+                }
+            }
+        }
+
+        val updatedStrat = targetStrat.copy(indicatorConfig = updatedIc)
+        setStrategy(updatedStrat)
     }
 
     fun selectHighWinRateStrategy() {
@@ -361,8 +643,8 @@ class BacktestViewModel(application: Application) : AndroidViewModel(application
                     aPlusTrendlineConfig = approvedConfigWithHash
                 )
             )
-            runBacktest()
         }
+        syncPendingConfiguration()
     }
 
     fun createExperimentalCopy(experimentName: String) {
@@ -424,8 +706,8 @@ class BacktestViewModel(application: Application) : AndroidViewModel(application
                     aPlusTrendlineConfig = profile.config
                 )
             )
-            runBacktest()
         }
+        syncPendingConfiguration()
     }
 
     private fun buildAplusConfigFromParameters(params: List<APlusParameterItem>, base: APlusTrendlineConfig): APlusTrendlineConfig {
@@ -471,7 +753,71 @@ class BacktestViewModel(application: Application) : AndroidViewModel(application
 
     fun updateRiskParameters(risk: RiskParameters) {
         _riskParameters.value = risk
-        runBacktest()
+        _currentResult.value = null
+        syncPendingConfiguration()
+    }
+
+    fun updateInitialCapital(capital: Double) {
+        _riskParameters.value = _riskParameters.value.copy(initialCapital = capital)
+        _currentResult.value = null
+        syncPendingConfiguration()
+    }
+
+    fun updatePositionSizing(mode: PositionSizingMode, value: Double) {
+        _riskParameters.value = _riskParameters.value.copy(
+            positionSizingMode = mode,
+            positionSizeValue = value
+        )
+        _currentResult.value = null
+        syncPendingConfiguration()
+    }
+
+    fun updateStopLoss(type: StopLossType, value: Double) {
+        _riskParameters.value = _riskParameters.value.copy(stopLossType = type, stopLossValue = value)
+        _currentResult.value = null
+        syncPendingConfiguration()
+    }
+
+    fun updateTakeProfit(type: TakeProfitType, value: Double) {
+        _riskParameters.value = _riskParameters.value.copy(takeProfitType = type, takeProfitValue = value)
+        _currentResult.value = null
+        syncPendingConfiguration()
+    }
+
+    fun updateCommissionBps(bps: Double) {
+        _riskParameters.value = _riskParameters.value.copy(commissionBps = bps)
+        _currentResult.value = null
+        syncPendingConfiguration()
+    }
+
+    fun updateSlippageBps(bps: Double) {
+        _riskParameters.value = _riskParameters.value.copy(slippageBps = bps)
+        _currentResult.value = null
+        syncPendingConfiguration()
+    }
+
+    fun updateExecutionModel(model: ExecutionModel) {
+        _riskParameters.value = _riskParameters.value.copy(executionModel = model)
+        _currentResult.value = null
+        syncPendingConfiguration()
+    }
+
+    fun updateIntrabarExecution(assumption: IntrabarExecutionAssumption) {
+        _riskParameters.value = _riskParameters.value.copy(intrabarExecution = assumption)
+        _currentResult.value = null
+        syncPendingConfiguration()
+    }
+
+    fun updateLeverage(leverage: Double) {
+        _riskParameters.value = _riskParameters.value.copy(leverage = leverage)
+        _currentResult.value = null
+        syncPendingConfiguration()
+    }
+
+    fun updateAllowShorting(allow: Boolean) {
+        _riskParameters.value = _riskParameters.value.copy(allowShorting = allow)
+        _currentResult.value = null
+        syncPendingConfiguration()
     }
 
     fun updateSmcConfig(smcConfig: SmcConfig) {
@@ -487,17 +833,22 @@ class BacktestViewModel(application: Application) : AndroidViewModel(application
             indicatorConfig = current.indicatorConfig.copy(smcConfig = smcConfig)
         )
         _selectedStrategy.value = updated
-        runBacktest()
+        _currentResult.value = null
+        syncPendingConfiguration()
     }
 
     fun setProvider(provider: ProviderSelection) {
         _selectedProvider.value = provider
-        runBacktest()
+        _currentResult.value = null
+        syncPendingConfiguration()
     }
 
     fun setDatePreset(preset: DateRangePreset) {
         _selectedDatePreset.value = preset
-        runBacktest()
+        _customStartDate.value = null
+        _customEndDate.value = null
+        _currentResult.value = null
+        syncPendingConfiguration()
     }
 
     fun setApiKey(key: String) {
@@ -532,22 +883,24 @@ class BacktestViewModel(application: Application) : AndroidViewModel(application
         _backtestProgress.value = BacktestProgress(isRunning = false)
     }
 
-    fun runBacktest() {
+    fun runBacktest(explicitConfig: BacktestConfiguration? = null) {
         backtestJob?.cancel()
         backtestJob = viewModelScope.launch(Dispatchers.Default) {
             _isBacktesting.value = true
             _dataFetchError.value = null
 
-            val asset = _selectedAsset.value
-            val regime = _selectedRegime.value
-            val tf = _selectedTimeframe.value
-            val strat = _selectedStrategy.value
-            val risk = _riskParameters.value
-            val preset = _selectedDatePreset.value
-            val prov = _selectedProvider.value
+            val cfg = explicitConfig ?: buildCurrentBacktestConfiguration()
+            val asset = cfg.asset
+            val regime = cfg.marketRegime
+            val tf = cfg.timeframe
+            val strat = cfg.strategy
+            val risk = cfg.toRiskParameters()
+            val startMs = cfg.startTimestamp
+            val endMs = cfg.endTimestamp
+            val prov = cfg.provider
 
             // Performance Gate Enforcement for A+ Trendline Strategy
-            if (strat.strategyType == StrategyType.A_PLUS_TRENDLINE) {
+            if (strat.strategyType == StrategyType.A_PLUS_TRENDLINE && !strat.isCustom) {
                 val aplusApproval = _aplusApprovalState.value
                 if (!aplusApproval.isApproved && !strat.indicatorConfig.aPlusTrendlineConfig.isApproved) {
                     _dataFetchError.value = "PERFORMANCE BACKTEST BLOCKED: A+ Trendline Strategy is in 'A_PLUS_PENDING_APPROVAL' state. Specification must be approved in the Strategy Specification screen before running performance backtests."
@@ -559,16 +912,13 @@ class BacktestViewModel(application: Application) : AndroidViewModel(application
                 }
             }
 
-            val now = System.currentTimeMillis()
-            val startMs = now - (preset.days.toLong() * 24L * 60L * 60L * 1000L)
-
             _backtestProgress.value = BacktestProgress(
                 isRunning = true,
                 progressPct = 0.20f,
-                stageMessage = "Preparing data...",
+                stageMessage = "Preparing historical dataset...",
                 processedCandles = 0,
                 totalCandles = 0,
-                currentDateStr = "Fetching historical dataset...",
+                currentDateStr = "Fetching ${asset.symbol} candles (${tf.label})...",
                 tradesFound = 0,
                 currentEquity = risk.initialCapital,
                 strategyName = strat.name,
@@ -580,7 +930,7 @@ class BacktestViewModel(application: Application) : AndroidViewModel(application
                 asset = asset,
                 timeframe = tf,
                 startTimeMs = startMs,
-                endTimeMs = now,
+                endTimeMs = endMs,
                 apiKey = _apiKey.value,
                 isDemoMode = false,
                 provider = if (prov == ProviderSelection.AUTO) null else prov.id,
@@ -594,7 +944,7 @@ class BacktestViewModel(application: Application) : AndroidViewModel(application
                 val validatedCandles = fetchData.candles
 
                 // Gate: Synthetic data is NOT permitted for official A+ Strategy performance verification
-                if (strat.strategyType == StrategyType.A_PLUS_TRENDLINE && !fetchData.isRealHistorical) {
+                if (strat.strategyType == StrategyType.A_PLUS_TRENDLINE && !fetchData.isRealHistorical && !strat.isCustom) {
                     _dataFetchError.value = "PERFORMANCE BACKTEST BLOCKED: Synthetic market data is not permitted for official A+ Strategy performance verification. Validated Real Market Data is required."
                     _currentResult.value = null
                     _healthScorecard.value = null
@@ -604,28 +954,23 @@ class BacktestViewModel(application: Application) : AndroidViewModel(application
                 }
                 _dataFetchError.value = null
 
-                val dsInfo = DataSourceInfo(
-                    provider = if (prov == ProviderSelection.AUTO) fetchData.providerName else prov.label,
-                    symbol = asset.symbol,
-                    market = asset.category.label,
-                    timeframe = tf.label,
-                    startDate = validatedCandles.firstOrNull()?.formattedDate(tf.minutes) ?: "",
-                    endDate = validatedCandles.lastOrNull()?.formattedDate(tf.minutes) ?: "",
-                    startTimestamp = validatedCandles.firstOrNull()?.timestamp ?: 0L,
-                    endTimestamp = validatedCandles.lastOrNull()?.timestamp ?: 0L,
+                val dsInfo = cfg.toDataSourceInfo(
                     candleCount = validatedCandles.size,
                     isRealHistorical = fetchData.isRealHistorical,
-                    validationStatus = if (fetchData.validationReport.isValid) "VERIFIED_VALID" else "WARNING",
-                    intrabarExecutionRule = risk.intrabarExecution.label,
+                    validationStatus = if (fetchData.validationReport.isValid) "VERIFIED_VALID" else "WARNING"
+                ).copy(
                     dataHash = fetchData.dataHash,
-                    datasetId = "${asset.symbol}_${tf.name}_${validatedCandles.firstOrNull()?.timestamp}_${validatedCandles.lastOrNull()?.timestamp}"
+                    startDate = validatedCandles.firstOrNull()?.formattedDate(tf.minutes) ?: cfg.startDate,
+                    endDate = validatedCandles.lastOrNull()?.formattedDate(tf.minutes) ?: cfg.endDate,
+                    startTimestamp = validatedCandles.firstOrNull()?.timestamp ?: startMs,
+                    endTimestamp = validatedCandles.lastOrNull()?.timestamp ?: endMs
                 )
                 _dataSourceInfo.value = dsInfo
 
                 _backtestProgress.value = BacktestProgress(
                     isRunning = true,
                     progressPct = 0.50f,
-                    stageMessage = "Running backtest...",
+                    stageMessage = "Simulating order execution...",
                     processedCandles = validatedCandles.size,
                     totalCandles = validatedCandles.size,
                     currentDateStr = dsInfo.endDate,
@@ -636,7 +981,7 @@ class BacktestViewModel(application: Application) : AndroidViewModel(application
                     timeframe = tf.label
                 )
 
-                val result = BacktestEngine.runBacktest(
+                val rawResult = BacktestEngine.runBacktest(
                     candles = validatedCandles,
                     asset = asset,
                     regime = regime,
@@ -648,10 +993,12 @@ class BacktestViewModel(application: Application) : AndroidViewModel(application
 
                 if (!isActive) return@launch
 
+                val result = rawResult.copy(configuration = cfg)
+
                 _backtestProgress.value = BacktestProgress(
                     isRunning = true,
-                    progressPct = 0.80f,
-                    stageMessage = "Calculating metrics...",
+                    progressPct = 0.85f,
+                    stageMessage = "Calculating performance metrics...",
                     processedCandles = validatedCandles.size,
                     totalCandles = validatedCandles.size,
                     currentDateStr = dsInfo.endDate,
@@ -665,30 +1012,16 @@ class BacktestViewModel(application: Application) : AndroidViewModel(application
                 _currentResult.value = result
                 _healthScorecard.value = StrategyAdvisor.generateHealthReport(result)
 
-                if (strat.id == STRATEGY_ID_TRENDLINE_BREAK_HIGH_WIN_RATE || strat.strategyType == StrategyType.TRENDLINE_BREAK) {
+                if (strat.id == STRATEGY_ID_TRENDLINE_BREAK_HIGH_WIN_RATE || (strat.strategyType == StrategyType.TRENDLINE_BREAK && !strat.isCustom)) {
                     _latestHwrResult.value = result
-                } else if (strat.id == STRATEGY_ID_A_PLUS_V1_0 || strat.strategyType == StrategyType.A_PLUS_TRENDLINE) {
+                } else if (strat.id == STRATEGY_ID_A_PLUS_V1_0 || (strat.strategyType == StrategyType.A_PLUS_TRENDLINE && !strat.isCustom)) {
                     _latestAplusResult.value = result
                 }
 
                 _backtestProgress.value = BacktestProgress(
-                    isRunning = true,
-                    progressPct = 0.95f,
-                    stageMessage = "Generating results...",
-                    processedCandles = validatedCandles.size,
-                    totalCandles = validatedCandles.size,
-                    currentDateStr = dsInfo.endDate,
-                    tradesFound = result.trades.size,
-                    currentEquity = result.metrics.finalEquity,
-                    strategyName = strat.name,
-                    symbol = asset.symbol,
-                    timeframe = tf.label
-                )
-
-                _backtestProgress.value = BacktestProgress(
                     isRunning = false,
                     progressPct = 1.0f,
-                    stageMessage = "Completed",
+                    stageMessage = "Completed (${result.trades.size} trades)",
                     processedCandles = validatedCandles.size,
                     totalCandles = validatedCandles.size,
                     currentDateStr = dsInfo.endDate,
@@ -712,21 +1045,25 @@ class BacktestViewModel(application: Application) : AndroidViewModel(application
     }
 
     // Strategy Lab (Compare multiple strategies on identical dataset)
-    fun runStrategyLabComparison(strategiesToCompare: List<StrategyDefinition>? = null) {
+    fun runStrategyLabComparison(
+        strategiesToCompare: List<StrategyDefinition>? = null,
+        explicitAsset: MarketAsset? = null,
+        explicitTf: Timeframe? = null
+    ) {
         val strats = strategiesToCompare ?: listOf(
-            StrategyDefinition.PRESETS.firstOrNull { it.strategyType == StrategyType.TRENDLINE_BREAK } ?: StrategyDefinition.PRESETS[0],
-            StrategyDefinition.PRESETS.firstOrNull { it.strategyType == StrategyType.SMC_CONCEPTS } ?: StrategyDefinition.PRESETS[1],
-            StrategyDefinition.PRESETS.firstOrNull { it.strategyType == StrategyType.ICT_CONCEPTS } ?: StrategyDefinition.PRESETS[2],
-            StrategyDefinition.PRESETS.firstOrNull { it.strategyType == StrategyType.SMC_ICT_CONCEPTS } ?: StrategyDefinition.PRESETS[3]
+            StrategyDefinition.PRESETS.firstOrNull { it.id == STRATEGY_ID_TRENDLINE_BREAK_HIGH_WIN_RATE } ?: StrategyDefinition.PRESETS[0],
+            StrategyDefinition.PRESETS.firstOrNull { it.id == STRATEGY_ID_A_PLUS_V1_0 } ?: StrategyDefinition.PRESETS[1],
+            StrategyDefinition.PRESETS.firstOrNull { it.strategyType == StrategyType.SMC_CONCEPTS } ?: StrategyDefinition.PRESETS[2],
+            StrategyDefinition.PRESETS.firstOrNull { it.strategyType == StrategyType.ICT_CONCEPTS } ?: StrategyDefinition.PRESETS[3]
         )
 
         viewModelScope.launch(Dispatchers.Default) {
             _isStrategyLabRunning.value = true
             _strategyLabItems.value = strats.map { StrategyLabItem(strategy = it, isEvaluating = true) }
 
-            val asset = _selectedAsset.value
+            val asset = explicitAsset ?: _selectedAsset.value
             val regime = _selectedRegime.value
-            val tf = _selectedTimeframe.value
+            val tf = explicitTf ?: _selectedTimeframe.value
             val risk = _riskParameters.value
             val preset = _selectedDatePreset.value
             val prov = _selectedProvider.value

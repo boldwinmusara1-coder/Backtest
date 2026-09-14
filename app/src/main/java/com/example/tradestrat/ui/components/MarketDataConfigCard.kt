@@ -22,12 +22,15 @@ import com.example.tradestrat.model.Timeframe
 import com.example.ui.theme.*
 
 enum class DateRangePreset(val label: String, val days: Int) {
+    DAYS_7("7D", 7),
     DAYS_30("30D", 30),
     DAYS_90("90D", 90),
     DAYS_180("180D", 180),
     YEAR_1("1Y", 365),
     YEARS_2("2Y", 730),
-    MAX("MAX", 1200)
+    YEARS_3("3Y", 1095),
+    YEARS_5("5Y", 1825),
+    MAX("MAX", 2000)
 }
 
 enum class ProviderSelection(val id: String, val label: String, val description: String) {

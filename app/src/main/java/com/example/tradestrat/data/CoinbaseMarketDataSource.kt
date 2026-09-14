@@ -30,12 +30,14 @@ class CoinbaseMarketDataSource(
 
     private fun mapGranularity(tf: Timeframe): Int {
         return when (tf) {
+            Timeframe.M1 -> 60
             Timeframe.M5 -> 300
             Timeframe.M15 -> 900
             Timeframe.M30 -> 1800
             Timeframe.H1 -> 3600
             Timeframe.H4 -> 3600 // Request 1h and aggregate into true 4h
             Timeframe.D1 -> 86400
+            Timeframe.W1 -> 86400 // Request 1d and aggregate into 1w
         }
     }
 

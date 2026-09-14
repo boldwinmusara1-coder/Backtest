@@ -369,12 +369,22 @@ fun DashboardScreen(
                     ) {
                         Icon(imageVector = Icons.Default.Analytics, contentDescription = "Ready", tint = theme.brandPrimary, modifier = Modifier.size(36.dp))
                         Text("No Backtest Executed Yet", fontWeight = FontWeight.Bold, color = theme.textPrimary)
-                        Button(
-                            onClick = { viewModel.runBacktest() },
-                            colors = ButtonDefaults.buttonColors(containerColor = theme.brandPrimary),
-                            shape = RoundedCornerShape(12.dp)
+                        Text(
+                            text = "Select a strategy and configure your market parameters in the Backtest tab to run an analysis.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = theme.textSecondary,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        OutlinedButton(
+                            onClick = onNavigateToBacktest,
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = theme.brandPrimary),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, theme.brandPrimary),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.testTag("dashboard_go_to_backtest_button")
                         ) {
-                            Text("Run Default Backtest", fontWeight = FontWeight.Bold)
+                            Icon(imageVector = Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Configure & Run Backtest", fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }

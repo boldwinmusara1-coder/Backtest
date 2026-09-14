@@ -33,12 +33,14 @@ class BinanceMarketDataSource(
 
     private fun mapTimeframe(tf: Timeframe): String {
         return when (tf) {
+            Timeframe.M1 -> "1m"
             Timeframe.M5 -> "5m"
             Timeframe.M15 -> "15m"
             Timeframe.M30 -> "30m"
             Timeframe.H1 -> "1h"
             Timeframe.H4 -> "4h"
             Timeframe.D1 -> "1d"
+            Timeframe.W1 -> "1w"
         }
     }
 

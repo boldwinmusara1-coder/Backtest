@@ -2,9 +2,11 @@ package com.example.tradestrat.ui.screens
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -19,6 +21,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.tradestrat.model.STRATEGY_ID_A_PLUS_V1_0
+import com.example.tradestrat.model.STRATEGY_ID_TRENDLINE_BREAK_HIGH_WIN_RATE
 import com.example.tradestrat.model.StrategyLabItem
 import com.example.tradestrat.model.StrategyType
 import com.example.tradestrat.ui.BacktestViewModel
@@ -36,13 +40,21 @@ fun StrategyLabScreen(
     val theme = LocalAppTheme.current
     val strategyLabItems by viewModel.strategyLabItems.collectAsState()
     val isRunning by viewModel.isStrategyLabRunning.collectAsState()
-    val asset by viewModel.selectedAsset.collectAsState()
-    val tf by viewModel.selectedTimeframe.collectAsState()
+    val currentAsset by viewModel.selectedAsset.collectAsState()
+    val currentTf by viewModel.selectedTimeframe.collectAsState()
+    val allStrategies by viewModel.allStrategies.collectAsState()
 
-    LaunchedEffect(Unit) {
-        if (strategyLabItems.isEmpty()) {
-            viewModel.runStrategyLabComparison()
-        }
+    var labAsset by remember { mutableStateOf(currentAsset) }
+    var labTf by remember { mutableStateOf(currentTf) }
+    var selectedStrategyIds by remember {
+        mutableStateOf(
+            setOf(
+                STRATEGY_ID_TRENDLINE_BREAK_HIGH_WIN_RATE,
+                STRATEGY_ID_A_PLUS_V1_0,
+                allStrategies.firstOrNull { it.strategyType == StrategyType.SMC_CONCEPTS }?.id ?: "smc_default",
+                allStrategies.firstOrNull { it.strategyType == StrategyType.ICT_CONCEPTS }?.id ?: "ict_default"
+            )
+        )
     }
 
     Scaffold(
@@ -59,7 +71,7 @@ fun StrategyLabScreen(
                             color = theme.textPrimary
                         )
                         Text(
-                            text = "Side-by-Side Evaluation on ${asset.symbol} (${tf.label})",
+                            text = "Multi-Strategy Comparison Matrix • ${labAsset.symbol} (${labTf.label})",
                             style = MaterialTheme.typography.bodySmall,
                             color = theme.textSecondary,
                             fontSize = 11.sp
@@ -72,7 +84,19 @@ fun StrategyLabScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.runStrategyLabComparison() }) {
+                    IconButton(
+                        onClick = {
+                            val picked = allStrategies.filter { selectedStrategyIds.contains(it.id) }
+                            if (picked.isNotEmpty()) {
+                                viewModel.runStrategyLabComparison(
+                                    strategiesToCompare = picked,
+                                    explicitAsset = labAsset,
+                                    explicitTf = labTf
+                                )
+                            }
+                        },
+                        enabled = !isRunning
+                    ) {
                         Icon(imageVector = Icons.Default.Refresh, contentDescription = "Rerun", tint = theme.brandPrimary)
                     }
                 },
@@ -87,25 +111,160 @@ fun StrategyLabScreen(
                 .padding(horizontal = 14.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Explanatory Note
+            // Lab Configuration Card
             item {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = theme.surfaceElevated,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, theme.borderSubtle)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = theme.surface),
+                    border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(theme.borderSubtle))
                 ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(imageVector = Icons.Default.Science, contentDescription = "Lab", tint = theme.brandPrimary)
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
-                            text = "Evaluates Trendline, SMC, ICT, and SMC+ICT Confluence against identical market bars, spread, and risk rules to verify performance independence.",
-                            fontSize = 11.sp,
-                            color = theme.textSecondary,
-                            lineHeight = 15.sp
+                            text = "LAB EXPERIMENT CONFIGURATION",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = theme.brandPrimary,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
                         )
+
+                        // Asset Selector
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Asset", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = theme.textSecondary)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(androidx.compose.foundation.rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                val popularAssets = listOf("BTC/USD", "ETH/USD", "SOL/USD", "SPY", "QQQ", "AAPL", "EUR/USD", "XAU/USD")
+                                popularAssets.forEach { symbol ->
+                                    val asset = com.example.tradestrat.data.MarketDataProvider.ASSETS.find { it.symbol == symbol } ?: com.example.tradestrat.data.MarketDataProvider.ASSETS.first()
+                                    val isSel = labAsset.symbol == symbol
+                                    FilterChip(
+                                        selected = isSel,
+                                        onClick = { labAsset = asset },
+                                        label = { Text(symbol, fontSize = 11.sp, fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = theme.brandPrimary.copy(alpha = 0.2f),
+                                            selectedLabelColor = theme.brandPrimary
+                                        ),
+                                        border = FilterChipDefaults.filterChipBorder(
+                                            enabled = true,
+                                            selected = isSel,
+                                            borderColor = theme.borderSubtle,
+                                            selectedBorderColor = theme.brandPrimary
+                                        ),
+                                        modifier = Modifier.height(30.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        // Timeframe Selector
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Timeframe", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = theme.textSecondary)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(androidx.compose.foundation.rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                listOf(
+                                    com.example.tradestrat.model.Timeframe.D1,
+                                    com.example.tradestrat.model.Timeframe.H4,
+                                    com.example.tradestrat.model.Timeframe.H1,
+                                    com.example.tradestrat.model.Timeframe.M30,
+                                    com.example.tradestrat.model.Timeframe.M15
+                                ).forEach { tf ->
+                                    val isSel = labTf == tf
+                                    FilterChip(
+                                        selected = isSel,
+                                        onClick = { labTf = tf },
+                                        label = { Text(tf.label, fontSize = 11.sp, fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = theme.brandPrimary.copy(alpha = 0.2f),
+                                            selectedLabelColor = theme.brandPrimary
+                                        ),
+                                        border = FilterChipDefaults.filterChipBorder(
+                                            enabled = true,
+                                            selected = isSel,
+                                            borderColor = theme.borderSubtle,
+                                            selectedBorderColor = theme.brandPrimary
+                                        ),
+                                        modifier = Modifier.height(30.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        // Strategy Selection Chips
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Select Strategies to Compare (2–6)", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = theme.textSecondary)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(androidx.compose.foundation.rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                allStrategies.forEach { strat ->
+                                    val isChecked = selectedStrategyIds.contains(strat.id)
+                                    FilterChip(
+                                        selected = isChecked,
+                                        onClick = {
+                                            selectedStrategyIds = if (isChecked) {
+                                                if (selectedStrategyIds.size > 1) selectedStrategyIds - strat.id else selectedStrategyIds
+                                            } else {
+                                                selectedStrategyIds + strat.id
+                                            }
+                                        },
+                                        label = { Text(strat.name, fontSize = 11.sp, fontWeight = if (isChecked) FontWeight.Bold else FontWeight.Normal) },
+                                        leadingIcon = if (isChecked) {
+                                            { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                                        } else null,
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = theme.brandPrimary.copy(alpha = 0.2f),
+                                            selectedLabelColor = theme.brandPrimary
+                                        ),
+                                        border = FilterChipDefaults.filterChipBorder(
+                                            enabled = true,
+                                            selected = isChecked,
+                                            borderColor = theme.borderSubtle,
+                                            selectedBorderColor = theme.brandPrimary
+                                        ),
+                                        modifier = Modifier.height(30.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        // Explicit Run Button
+                        Button(
+                            onClick = {
+                                val picked = allStrategies.filter { selectedStrategyIds.contains(it.id) }
+                                viewModel.runStrategyLabComparison(
+                                    strategiesToCompare = picked,
+                                    explicitAsset = labAsset,
+                                    explicitTf = labTf
+                                )
+                            },
+                            enabled = !isRunning,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = theme.brandPrimary)
+                        ) {
+                            if (isRunning) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Running Lab Comparison...", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            } else {
+                                Icon(Icons.Default.Science, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color.White)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("RUN STRATEGY LAB COMPARISON", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            }
+                        }
                     }
                 }
             }

@@ -139,6 +139,7 @@ data class BacktestResult(
     } else null,
     val isGated: Boolean = false,
     val gateReason: String? = null,
+    val configuration: BacktestConfiguration? = null,
     val dataSource: DataSourceInfo = DataSourceInfo(
         provider = "Real Historical API",
         symbol = asset.symbol,
